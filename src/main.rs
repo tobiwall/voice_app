@@ -1,12 +1,9 @@
-use dotenvy::dotenv;
 use portaudio as pa;
-use reqwest::Client;
 use serde_json::Value;
 use shuttle_runtime::Error as ShuttleError;
-use shuttle_runtime::Service;
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{Read};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use warp::http::Response;
@@ -55,7 +52,7 @@ impl shuttle_runtime::Service for MyService {
                                 .open_non_blocking_stream(
                                     input_params,
                                     move |pa::InputStreamCallbackArgs {
-                                              buffer, frames, ..
+                                              buffer,  ..
                                           }| {
                                         let mut samples_lock = samples.lock().unwrap();
                                         samples_lock.extend_from_slice(buffer);
