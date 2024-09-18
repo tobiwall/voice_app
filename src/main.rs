@@ -122,13 +122,14 @@ impl shuttle_runtime::Service for MyService {
         let routes = start.or(stop).or(options);
 
         println!("Starting Warp server...");
-        // Run the server directly, no need for tokio::spawn here
-        warp::serve(routes).run(_addr).await;
+        // Run the server directly with a different port
+        warp::serve(routes).run(([0, 0, 0, 0], 8001)).await;
         println!("Warp server has stopped.");
 
         Ok(())
     }
 }
+
 
 
 fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error>> {
