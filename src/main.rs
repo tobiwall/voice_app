@@ -123,7 +123,7 @@ impl shuttle_runtime::Service for MyService {
 
         println!("Starting Warp server...");
         // Run the server directly with a different port
-        warp::serve(routes).run(([0, 0, 0, 0], 8001)).await;
+        warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
         println!("Warp server has stopped.");
 
         Ok(())
