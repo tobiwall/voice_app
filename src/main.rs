@@ -6,7 +6,6 @@ use std::fs::File;
 use std::io::Read;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use warp::http::{Response, StatusCode};
 use warp::Filter;
 use dotenvy::dotenv;
 use std::env;
@@ -72,13 +71,7 @@ impl shuttle_runtime::Service for MyService {
                             println!("Recording stopped.");
                         });
                     }
-                    Response::builder()
-                        .header("Access-Control-Allow-Origin", "*")
-                        .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                        .header("Access-Control-Allow-Headers", "Content-Type")
-                        .status(StatusCode::OK)
-                        .body("Recording started")
-                        .unwrap()
+                    warp::reply::with_status("Recording started", warp::http::StatusCode::OK)
                 }
             });
 
@@ -113,34 +106,12 @@ impl shuttle_runtime::Service for MyService {
                             Err(e) => eprintln!("Error saving audio file: {}", e),
                         }
                     }
-                    Response::builder()
-                        .header("Access-Control-Allow-Origin", "*")
-                        .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                        .header("Access-Control-Allow-Headers", "Content-Type")
-                        .status(StatusCode::OK)
-                        .body("Recording stopped")
-                        .unwrap()
+                    warp::reply::with_status("Recording stopped", warp::http::StatusCode::OK)
                 }
             });
 
-        // Handle OPTIONS requests for CORS preflight checks
-        let options = warp::options()
-            .map(|| {
-                warp::reply::with_header(
-                    warp::reply(),
-                    "Access-Control-Allow-Origin",
-                    "*",
-                )
-            })
-            .map(|reply| {
-                warp::reply::with_header(reply, "Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-            })
-            .map(|reply| {
-                warp::reply::with_header(reply, "Access-Control-Allow-Headers", "Content-Type")
-            });
-
-        // Combine the routes
-        let routes = start.or(stop).or(options).with(cors);
+        // Combine the routes with CORS
+        let routes = start.or(stop).with(cors);
 
         println!("Starting Warp server...");
         // Run the server directly with a different port
@@ -190,7 +161,6 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
         .send()
         .await?;
 
-    // Ausgabe der API-Antwort zur Fehlerbehebung
     if !upload_response.status().is_success() {
         let error_body = upload_response.text().await?;
         println!("Fehler beim Hochladen: {}", error_body);
