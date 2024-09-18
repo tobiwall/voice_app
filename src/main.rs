@@ -125,8 +125,12 @@ impl shuttle_runtime::Service for MyService {
             // Combine the routes
             let routes = start.or(stop).or(options);
 
+            println!("Starting Warp server...");
             // Run the server
-            warp::serve(routes).run(_addr).await;
+            warp::serve(routes)
+                .run(_addr)
+                .await;
+            println!("Warp server has stopped.");
         });
 
         Ok(())
