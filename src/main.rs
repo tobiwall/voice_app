@@ -3,10 +3,10 @@ use serde_json::Value;
 use shuttle_runtime::Error as ShuttleError;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read};
+use std::io::Read;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use warp::http::Response;
+use warp::http::{Response, StatusCode};
 use warp::Filter;
 use dotenvy::dotenv;
 use std::env;
@@ -16,7 +16,7 @@ const FRAMES_PER_BUFFER: u32 = 64;
 
 #[shuttle_runtime::main]
 async fn shuttle_main() -> Result<MyService, ShuttleError> {
-    dotenv().ok();  // dotenvy verwenden, um .env Datei zu laden
+    dotenv().ok(); // dotenvy verwenden, um .env Datei zu laden
     Ok(MyService {})
 }
 
@@ -31,95 +31,116 @@ impl shuttle_runtime::Service for MyService {
         let samples_clone = Arc::clone(&samples);
         let is_recording_clone = Arc::clone(&is_recording);
 
-        // Start recording route
-        let start = warp::path("record").and(warp::post()).map({
-            let samples = Arc::clone(&samples_clone);
-            let is_recording = Arc::clone(&is_recording_clone);
+        // CORS Filter
+        let cors = warp::cors()
+            .allow_any_origin()
+            .allow_methods(vec!["POST", "GET", "OPTIONS"])
+            .allow_headers(vec!["Content-Type"]);
 
-            move || {
-                let mut is_recording_lock = is_recording.lock().unwrap();
-                if !*is_recording_lock {
-                    *is_recording_lock = true;
-                    let samples = Arc::clone(&samples);
-                    tokio::spawn(async move {
-                        let pa = pa::PortAudio::new().unwrap();
-                        let input_params: pa::InputStreamSettings<f32> = pa
-                            .default_input_stream_settings(1, SAMPLE_RATE, FRAMES_PER_BUFFER)
-                            .unwrap();
-                        let mut stream = pa
-                            .open_non_blocking_stream(
-                                input_params,
-                                move |pa::InputStreamCallbackArgs { buffer, .. }| {
-                                    let mut samples_lock = samples.lock().unwrap();
-                                    samples_lock.extend_from_slice(buffer);
-                                    pa::Continue
-                                },
-                            )
-                            .unwrap();
-                        stream.start().unwrap();
-                        println!("Recording started.");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await; // Beispiel: Aufnahme für 10 Sekunden
-                        stream.stop().unwrap();
-                        stream.close().unwrap();
-                        println!("Recording stopped.");
-                    });
+        // Start recording route
+        let start = warp::path("record")
+            .and(warp::post())
+            .map({
+                let samples = Arc::clone(&samples_clone);
+                let is_recording = Arc::clone(&is_recording_clone);
+
+                move || {
+                    let mut is_recording_lock = is_recording.lock().unwrap();
+                    if !*is_recording_lock {
+                        *is_recording_lock = true;
+                        let samples = Arc::clone(&samples);
+                        tokio::spawn(async move {
+                            let pa = pa::PortAudio::new().unwrap();
+                            let input_params: pa::InputStreamSettings<f32> = pa
+                                .default_input_stream_settings(1, SAMPLE_RATE, FRAMES_PER_BUFFER)
+                                .unwrap();
+                            let mut stream = pa
+                                .open_non_blocking_stream(
+                                    input_params,
+                                    move |pa::InputStreamCallbackArgs { buffer, .. }| {
+                                        let mut samples_lock = samples.lock().unwrap();
+                                        samples_lock.extend_from_slice(buffer);
+                                        pa::Continue
+                                    },
+                                )
+                                .unwrap();
+                            stream.start().unwrap();
+                            println!("Recording started.");
+                            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await; // Beispiel: Aufnahme für 10 Sekunden
+                            stream.stop().unwrap();
+                            stream.close().unwrap();
+                            println!("Recording stopped.");
+                        });
+                    }
+                    Response::builder()
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+                        .header("Access-Control-Allow-Headers", "Content-Type")
+                        .status(StatusCode::OK)
+                        .body("Recording started")
+                        .unwrap()
                 }
-                Response::builder()
-                    .header("Access-Control-Allow-Origin", "*")
-                    .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                    .header("Access-Control-Allow-Headers", "Content-Type")
-                    .status(200)
-                    .body("Recording started")
-                    .unwrap()
-            }
-        });
+            });
 
         // Stop recording route
-        let stop = warp::path("stop_recording").and(warp::post()).map({
-            let samples = Arc::clone(&samples_clone);
-            let is_recording = Arc::clone(&is_recording_clone);
-            move || {
-                let mut is_recording_lock = is_recording.lock().unwrap();
-                if *is_recording_lock {
-                    *is_recording_lock = false;
-                    println!("Recording stopped.");
+        let stop = warp::path("stop_recording")
+            .and(warp::post())
+            .map({
+                let samples = Arc::clone(&samples_clone);
+                let is_recording = Arc::clone(&is_recording_clone);
+                move || {
+                    let mut is_recording_lock = is_recording.lock().unwrap();
+                    if *is_recording_lock {
+                        *is_recording_lock = false;
+                        println!("Recording stopped.");
 
-                    // Save samples to file and trigger transcription process
-                    let samples_lock = samples.lock().unwrap();
-                    let file_path = "recording.wav";
-                    match save_samples_to_file(&samples_lock, file_path) {
-                        Ok(_) => {
-                            println!("Audio saved to file: {}", file_path);
-                            // Now upload and transcribe the file
-                            tokio::spawn(async move {
-                                match upload_and_transcribe(file_path).await {
-                                    Ok(transcription) => {
-                                        println!("Transcription: {}", transcription)
+                        // Save samples to file and trigger transcription process
+                        let samples_lock = samples.lock().unwrap();
+                        let file_path = "recording.wav";
+                        match save_samples_to_file(&samples_lock, file_path) {
+                            Ok(_) => {
+                                println!("Audio saved to file: {}", file_path);
+                                // Now upload and transcribe the file
+                                tokio::spawn(async move {
+                                    match upload_and_transcribe(file_path).await {
+                                        Ok(transcription) => {
+                                            println!("Transcription: {}", transcription)
+                                        }
+                                        Err(e) => eprintln!("Error during transcription: {}", e),
                                     }
-                                    Err(e) => eprintln!("Error during transcription: {}", e),
-                                }
-                            });
+                                });
+                            }
+                            Err(e) => eprintln!("Error saving audio file: {}", e),
                         }
-                        Err(e) => eprintln!("Error saving audio file: {}", e),
                     }
+                    Response::builder()
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+                        .header("Access-Control-Allow-Headers", "Content-Type")
+                        .status(StatusCode::OK)
+                        .body("Recording stopped")
+                        .unwrap()
                 }
-                Response::builder()
-                    .header("Access-Control-Allow-Origin", "*")
-                    .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                    .header("Access-Control-Allow-Headers", "Content-Type")
-                    .status(200)
-                    .body("Recording stopped")
-                    .unwrap()
-            }
-        });
+            });
 
         // Handle OPTIONS requests for CORS preflight checks
-        let options = warp::options().map(|| {
-            warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", "*")
-        });
+        let options = warp::options()
+            .map(|| {
+                warp::reply::with_header(
+                    warp::reply(),
+                    "Access-Control-Allow-Origin",
+                    "*",
+                )
+            })
+            .map(|reply| {
+                warp::reply::with_header(reply, "Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            })
+            .map(|reply| {
+                warp::reply::with_header(reply, "Access-Control-Allow-Headers", "Content-Type")
+            });
 
         // Combine the routes
-        let routes = start.or(stop).or(options);
+        let routes = start.or(stop).or(options).with(cors);
 
         println!("Starting Warp server...");
         // Run the server directly with a different port
@@ -129,8 +150,6 @@ impl shuttle_runtime::Service for MyService {
         Ok(())
     }
 }
-
-
 
 fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error>> {
     let spec = hound::WavSpec {
@@ -152,7 +171,6 @@ fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error
 }
 
 async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>> {
-    // Variablen innerhalb der Funktion definieren
     let api_key = std::env::var("API_KEY").expect("API_KEY must be set");
     let upload_url = std::env::var("UPLOAD_URL").expect("UPLOAD_URL must be set");
     let transcript_url = std::env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL must be set");
@@ -232,7 +250,6 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
         }
     }
 }
-
 
 fn handle_transcript(transcript_text: &str) {
     println!("Handling transcript: {}", transcript_text);
