@@ -131,7 +131,8 @@ impl shuttle_runtime::Service for MyService {
             let routes = start.or(stop).or(options);
 
             // Run the server
-            warp::serve(routes).run(([0, 0, 0, 0], 3030)).await;
+            warp::serve(routes).run(_addr).await;
+
         });
 
         Ok(())
