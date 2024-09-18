@@ -162,59 +162,82 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
     let mut file = File::open(file_path)?;
     let mut audio_data = Vec::new();
     file.read_to_end(&mut audio_data)?;
+    println!("Audio-Datei geladen, Größe: {} Bytes", audio_data.len());
 
     let upload_response = client
-        .post(&upload_url)  // Verwende hier die Variable
-        .header("authorization", &api_key)  // Verwende hier die Variable
+        .post(&upload_url)
+        .header("authorization", &api_key)
         .header("content-type", "audio/wav")
         .body(audio_data)
         .send()
-        .await?
-        .json::<Value>()
         .await?;
 
-    let audio_url = upload_response["upload_url"]
+    // Ausgabe der API-Antwort zur Fehlerbehebung
+    if !upload_response.status().is_success() {
+        let error_body = upload_response.text().await?;
+        println!("Fehler beim Hochladen: {}", error_body);
+        return Err("Fehler beim Hochladen der Audiodatei".into());
+    }
+
+    let upload_json = upload_response.json::<Value>().await?;
+    println!("Upload erfolgreich: {:?}", upload_json);
+
+    let audio_url = upload_json["upload_url"]
         .as_str()
         .ok_or("Failed to get upload URL")?;
+    println!("Audio-URL erhalten: {}", audio_url);
 
     let transcript_request = client
-        .post(&transcript_url)  // Verwende hier die Variable
-        .header("authorization", &api_key)  // Verwende hier die Variable
+        .post(&transcript_url)
+        .header("authorization", &api_key)
         .json(&serde_json::json!({ "audio_url": audio_url }))
         .send()
-        .await?
-        .json::<Value>()
         .await?;
 
-    let transcript_id = transcript_request["id"]
+    if !transcript_request.status().is_success() {
+        let error_body = transcript_request.text().await?;
+        println!("Fehler beim Senden des Transkriptionsauftrags: {}", error_body);
+        return Err("Fehler beim Anfordern der Transkription".into());
+    }
+
+    let transcript_json = transcript_request.json::<Value>().await?;
+    let transcript_id = transcript_json["id"]
         .as_str()
         .ok_or("Failed to get transcript ID")?;
+    println!("Transkriptionsauftrag erfolgreich, ID: {}", transcript_id);
 
     loop {
         let status_response = client
             .get(format!("{}/{}", transcript_url, transcript_id))
             .header("authorization", &api_key)
             .send()
-            .await?
-            .json::<Value>()
             .await?;
 
-        let status = status_response["status"].as_str().unwrap_or("");
+        let status_json = status_response.json::<Value>().await?;
+        let status = status_json["status"].as_str().unwrap_or("");
+        println!("Transkriptionsstatus: {}", status);
+
         if status == "completed" {
-            let transcript_text = status_response["text"].as_str().unwrap_or("");
+            let transcript_text = status_json["text"].as_str().unwrap_or("");
+            println!("Transkription abgeschlossen: {}", transcript_text);
             handle_transcript(transcript_text);
             return Ok(transcript_text.to_string());
         } else if status == "failed" {
-            let error_message = status_response["error"].as_str().unwrap_or("Unknown error");
+            let error_message = status_json["error"].as_str().unwrap_or("Unknown error");
+            println!("Transkription fehlgeschlagen: {}", error_message);
             return Err(format!("Transcription failed: {}", error_message).into());
         } else {
+            println!("Warte auf Transkriptionsabschluss...");
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
         }
     }
 }
 
+
 fn handle_transcript(transcript_text: &str) {
-    if transcript_text.contains("weather") {
+    println!("Handling transcript: {}", transcript_text);
+
+    if transcript_text.to_lowercase().contains("weather") {
         println!("Opening weather app...");
         let status = Command::new("open")
             .arg("/System/Applications/Weather.app")
@@ -224,7 +247,7 @@ fn handle_transcript(transcript_text: &str) {
         if !status.success() {
             eprintln!("Error opening weather app: {:?}", status);
         }
-    } else if transcript_text.contains("calculator") {
+    } else if transcript_text.to_lowercase().contains("calculator") {
         println!("Opening calculator...");
         let status = Command::new("open")
             .arg("/System/Applications/Calculator.app")
@@ -234,5 +257,7 @@ fn handle_transcript(transcript_text: &str) {
         if !status.success() {
             eprintln!("Error opening calculator: {:?}", status);
         }
+    } else {
+        println!("No matching action found for transcript.");
     }
 }
