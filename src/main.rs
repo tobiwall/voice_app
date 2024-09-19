@@ -3,12 +3,11 @@ use serde_json::Value;
 use shuttle_runtime::Error as ShuttleError;
 use std::error::Error;
 use std::fs::File;
-use std::io::{Read};
+use std::io::Read;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use warp::http::Response;
 use warp::Filter;
-use warp::cors;
 
 const SAMPLE_RATE: f64 = 44_100.0;
 const FRAMES_PER_BUFFER: u32 = 64;
@@ -29,12 +28,11 @@ impl shuttle_runtime::Service for MyService {
         let samples_clone = Arc::clone(&samples);
         let is_recording_clone = Arc::clone(&is_recording);
 
-        // Set up CORS
-        let cors = cors::Cors::builder()
+        // Set up CORS using warp's built-in CORS support
+        let cors = warp::cors()
             .allow_any_origin()
-            .allow_any_method()
-            .allow_any_header()
-            .build();
+            .allow_methods(vec!["POST", "GET", "OPTIONS"])
+            .allow_headers(vec!["Content-Type"]);
 
         // Start recording route
         let start = warp::path("record").and(warp::post()).map({
@@ -70,9 +68,6 @@ impl shuttle_runtime::Service for MyService {
                     });
                 }
                 Response::builder()
-                    .header("Access-Control-Allow-Origin", "*")
-                    .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                    .header("Access-Control-Allow-Headers", "Content-Type")
                     .status(200)
                     .body("Recording started")
                     .unwrap()
@@ -109,9 +104,6 @@ impl shuttle_runtime::Service for MyService {
                     }
                 }
                 Response::builder()
-                    .header("Access-Control-Allow-Origin", "*")
-                    .header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-                    .header("Access-Control-Allow-Headers", "Content-Type")
                     .status(200)
                     .body("Recording stopped")
                     .unwrap()
@@ -119,23 +111,18 @@ impl shuttle_runtime::Service for MyService {
         });
 
         // Handle OPTIONS requests for CORS preflight checks
-        let options = warp::options().map(|| {
-            warp::reply::with_header(warp::reply(), "Access-Control-Allow-Origin", "*")
-        });
+        let options = warp::options().map(warp::reply);
 
-        // Combine the routes
+        // Combine the routes with CORS
         let routes = start.or(stop).or(options).with(cors);
 
         println!("Starting Warp server...");
-        // Run the server directly with a different port
         warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
         println!("Warp server has stopped.");
 
         Ok(())
     }
 }
-
-
 
 fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error>> {
     let spec = hound::WavSpec {
@@ -157,7 +144,6 @@ fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error
 }
 
 async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>> {
-    // Variablen innerhalb der Funktion definieren
     let api_key = std::env::var("API_KEY").expect("API_KEY must be set");
     let upload_url = std::env::var("UPLOAD_URL").expect("UPLOAD_URL must be set");
     let transcript_url = std::env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL must be set");
@@ -169,8 +155,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
     file.read_to_end(&mut audio_data)?;
 
     let upload_response = client
-        .post(&upload_url)  // Verwende hier die Variable
-        .header("authorization", &api_key)  // Verwende hier die Variable
+        .post(&upload_url)
+        .header("authorization", &api_key)
         .header("content-type", "audio/wav")
         .body(audio_data)
         .send()
@@ -183,8 +169,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
         .ok_or("Failed to get upload URL")?;
 
     let transcript_request = client
-        .post(&transcript_url)  // Verwende hier die Variable
-        .header("authorization", &api_key)  // Verwende hier die Variable
+        .post(&transcript_url)
+        .header("authorization", &api_key)
         .json(&serde_json::json!({ "audio_url": audio_url }))
         .send()
         .await?
