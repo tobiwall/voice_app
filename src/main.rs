@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use warp::http::Response;
 use warp::Filter;
+use warp::cors;
 
 const SAMPLE_RATE: f64 = 44_100.0;
 const FRAMES_PER_BUFFER: u32 = 64;
@@ -27,6 +28,13 @@ impl shuttle_runtime::Service for MyService {
         let is_recording = Arc::new(Mutex::new(false));
         let samples_clone = Arc::clone(&samples);
         let is_recording_clone = Arc::clone(&is_recording);
+
+        // Set up CORS
+        let cors = cors::Cors::builder()
+            .allow_any_origin()
+            .allow_any_method()
+            .allow_any_header()
+            .build();
 
         // Start recording route
         let start = warp::path("record").and(warp::post()).map({
@@ -116,7 +124,7 @@ impl shuttle_runtime::Service for MyService {
         });
 
         // Combine the routes
-        let routes = start.or(stop).or(options);
+        let routes = start.or(stop).or(options).with(cors);
 
         println!("Starting Warp server...");
         // Run the server directly with a different port
