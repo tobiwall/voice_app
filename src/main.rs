@@ -25,6 +25,7 @@ impl shuttle_runtime::Service for MyService {
     async fn bind(self, _addr: std::net::SocketAddr) -> Result<(), ShuttleError> {
         // Lade Umgebungsvariablen
         dotenv().ok();
+
         let api_key = Arc::new(env::var("API_KEY").expect("API_KEY not set"));
         let upload_url = Arc::new(env::var("UPLOAD_URL").expect("UPLOAD_URL not set"));
         let transcript_url = Arc::new(env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL not set"));
