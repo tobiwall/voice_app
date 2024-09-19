@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Talk2me</title>
+    <link rel="stylesheet" href="./style.css">
+    <script src="./script.js"></script>
+
+  </head>
+  <body onload="onInit()">
+    <div class="video-container">
+      <video autoplay muted loop id="background-video">
+        <source
+          src="./assets/video/155064-809859862_medium.mp4"
+          type="video/mp4"
+        />
+        Your browser does not support the video tag.
+      </video>
+      <div class="content" onclick="toogleRecording()">
+        <h1>Talk2me</h1>
+        <img src="./assets/img/icons8-mikrofon-100.png" alt="" />
+      </div>
+    </div>
+  </body>
+</html>

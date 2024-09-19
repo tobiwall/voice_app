@@ -7,12 +7,10 @@ use std::io::Read;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
+use std::env;
 
 const SAMPLE_RATE: f64 = 44_100.0;
 const FRAMES_PER_BUFFER: u32 = 64;
-const API_KEY: &str = "b4e9064be98642d6bc4d1216dcea51ce";
-const UPLOAD_URL: &str = "https://api.assemblyai.com/v2/upload";
-const TRANSCRIPT_URL: &str = "https://api.assemblyai.com/v2/transcript";
 
 #[shuttle_runtime::main]
 async fn shuttle_main() -> Result<MyService, ShuttleError> {
@@ -24,21 +22,20 @@ struct MyService {}
 #[shuttle_runtime::async_trait]
 impl shuttle_runtime::Service for MyService {
     async fn bind(self, _addr: std::net::SocketAddr) -> Result<(), ShuttleError> {
+        // Load environment variables
+        dotenvy::dotenv().ok();
+        let api_key = env::var("API_KEY").expect("API_KEY not set");
+        let upload_url = env::var("UPLOAD_URL").expect("UPLOAD_URL not set");
+        let transcript_url = env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL not set");
+
         // Set up shared state
         let samples = Arc::new(Mutex::new(Vec::new()));
         let is_recording = Arc::new(Mutex::new(false));
         let samples_clone = Arc::clone(&samples);
         let is_recording_clone = Arc::clone(&is_recording);
 
-        // Create the CORS policy
-        let cors = warp::cors()
-            .allow_any_origin() // Erlaubt alle Ursprünge
-            .allow_methods(vec![
-                warp::http::Method::POST,
-                warp::http::Method::GET,
-                warp::http::Method::OPTIONS,
-            ])
-            .allow_headers(vec![warp::http::header::CONTENT_TYPE]);
+        // Serve static frontend files
+        let frontend = warp::fs::dir("./frontend");
 
         // Start recording route
         let start = warp::path("record").and(warp::post()).map({
@@ -81,6 +78,10 @@ impl shuttle_runtime::Service for MyService {
         let stop = warp::path("stop_recording").and(warp::post()).map({
             let samples = Arc::clone(&samples_clone);
             let is_recording = Arc::clone(&is_recording_clone);
+            let api_key = api_key.clone();
+            let upload_url = upload_url.clone();
+            let transcript_url = transcript_url.clone();
+
             move || {
                 let mut is_recording_lock = is_recording.lock().unwrap();
                 if *is_recording_lock {
@@ -95,7 +96,7 @@ impl shuttle_runtime::Service for MyService {
                             println!("Audio saved to file: {}", file_path);
                             // Now upload and transcribe the file
                             tokio::spawn(async move {
-                                match upload_and_transcribe(file_path).await {
+                                match upload_and_transcribe(file_path, &api_key, &upload_url, &transcript_url).await {
                                     Ok(transcription) => {
                                         println!("Transcription: {}", transcription)
                                     }
@@ -110,12 +111,8 @@ impl shuttle_runtime::Service for MyService {
             }
         });
 
-        // Handle OPTIONS requests for CORS preflight checks
-        let options = warp::options()
-            .map(|| warp::reply::with_status("", warp::http::StatusCode::OK));
-
-        // Combine the routes with CORS
-        let routes = start.or(stop).or(options).with(cors);
+        // Combine routes
+        let routes = frontend.or(start).or(stop);
 
         println!("Starting Warp server...");
         warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
@@ -144,7 +141,7 @@ fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error
     Ok(())
 }
 
-async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>> {
+async fn upload_and_transcribe(file_path: &str, api_key: &str, upload_url: &str, transcript_url: &str) -> Result<String, Box<dyn Error>> {
     let client = reqwest::Client::new();
 
     let mut file = File::open(file_path)?;
@@ -152,8 +149,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
     file.read_to_end(&mut audio_data)?;
 
     let upload_response = client
-        .post(UPLOAD_URL)
-        .header("authorization", API_KEY)
+        .post(upload_url)
+        .header("authorization", api_key)
         .header("content-type", "audio/wav")
         .body(audio_data)
         .send()
@@ -166,8 +163,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
         .ok_or("Failed to get upload URL")?;
 
     let transcript_request = client
-        .post(TRANSCRIPT_URL)
-        .header("authorization", API_KEY)
+        .post(transcript_url)
+        .header("authorization", api_key)
         .json(&serde_json::json!({ "audio_url": audio_url }))
         .send()
         .await?
@@ -180,8 +177,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
 
     loop {
         let status_response = client
-            .get(format!("{}/{}", TRANSCRIPT_URL, transcript_id))
-            .header("authorization", API_KEY)
+            .get(format!("{}/{}", transcript_url, transcript_id))
+            .header("authorization", api_key)
             .send()
             .await?
             .json::<Value>()
