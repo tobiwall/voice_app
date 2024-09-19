@@ -6,8 +6,6 @@ use std::fs::File;
 use std::io::Read;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use warp::cors;
-use warp::http::Response;
 use warp::Filter;
 
 const SAMPLE_RATE: f64 = 44_100.0;
@@ -34,7 +32,7 @@ impl shuttle_runtime::Service for MyService {
 
         // Create the CORS policy
         let cors = warp::cors()
-            .allow_origin("https://talk2me.tobias-wall.de") // Erlaubt nur diese Domain
+            .allow_any_origin() // Erlaubt alle Ursprünge
             .allow_methods(vec![
                 warp::http::Method::POST,
                 warp::http::Method::GET,
@@ -113,8 +111,8 @@ impl shuttle_runtime::Service for MyService {
         });
 
         // Handle OPTIONS requests for CORS preflight checks
-        let options =
-            warp::options().map(|| warp::reply::with_status("", warp::http::StatusCode::OK));
+        let options = warp::options()
+            .map(|| warp::reply::with_status("", warp::http::StatusCode::OK));
 
         // Combine the routes with CORS
         let routes = start.or(stop).or(options).with(cors);
