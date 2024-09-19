@@ -13,3 +13,4 @@ hound = "3.4.0"
 warp = { version = "0.3" }
 dotenvy = "0.15"
 shuttle-runtime = "0.47.0"
+futures = "0.3"

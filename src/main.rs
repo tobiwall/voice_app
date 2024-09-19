@@ -6,11 +6,15 @@ use std::fs::File;
 use std::io::Read;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use warp::cors;
 use warp::http::Response;
 use warp::Filter;
 
 const SAMPLE_RATE: f64 = 44_100.0;
 const FRAMES_PER_BUFFER: u32 = 64;
+const API_KEY: &str = "b4e9064be98642d6bc4d1216dcea51ce";
+const UPLOAD_URL: &str = "https://api.assemblyai.com/v2/upload";
+const TRANSCRIPT_URL: &str = "https://api.assemblyai.com/v2/transcript";
 
 #[shuttle_runtime::main]
 async fn shuttle_main() -> Result<MyService, ShuttleError> {
@@ -28,11 +32,15 @@ impl shuttle_runtime::Service for MyService {
         let samples_clone = Arc::clone(&samples);
         let is_recording_clone = Arc::clone(&is_recording);
 
-        // Set up CORS using warp's built-in CORS support
+        // Create the CORS policy
         let cors = warp::cors()
-            .allow_any_origin()
-            .allow_methods(vec!["POST", "GET", "OPTIONS"])
-            .allow_headers(vec!["Content-Type"]);
+            .allow_origin("https://talk2me.tobias-wall.de") // Erlaubt nur diese Domain
+            .allow_methods(vec![
+                warp::http::Method::POST,
+                warp::http::Method::GET,
+                warp::http::Method::OPTIONS,
+            ])
+            .allow_headers(vec![warp::http::header::CONTENT_TYPE]);
 
         // Start recording route
         let start = warp::path("record").and(warp::post()).map({
@@ -61,16 +69,13 @@ impl shuttle_runtime::Service for MyService {
                             .unwrap();
                         stream.start().unwrap();
                         println!("Recording started.");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await; // Beispiel: Aufnahme für 10 Sekunden
+                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await; // Example: Record for 10 seconds
                         stream.stop().unwrap();
                         stream.close().unwrap();
                         println!("Recording stopped.");
                     });
                 }
-                Response::builder()
-                    .status(200)
-                    .body("Recording started")
-                    .unwrap()
+                warp::reply::with_status("Recording started", warp::http::StatusCode::OK)
             }
         });
 
@@ -103,15 +108,13 @@ impl shuttle_runtime::Service for MyService {
                         Err(e) => eprintln!("Error saving audio file: {}", e),
                     }
                 }
-                Response::builder()
-                    .status(200)
-                    .body("Recording stopped")
-                    .unwrap()
+                warp::reply::with_status("Recording stopped", warp::http::StatusCode::OK)
             }
         });
 
         // Handle OPTIONS requests for CORS preflight checks
-        let options = warp::options().map(warp::reply);
+        let options =
+            warp::options().map(|| warp::reply::with_status("", warp::http::StatusCode::OK));
 
         // Combine the routes with CORS
         let routes = start.or(stop).or(options).with(cors);
@@ -144,10 +147,6 @@ fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error
 }
 
 async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>> {
-    let api_key = std::env::var("API_KEY").expect("API_KEY must be set");
-    let upload_url = std::env::var("UPLOAD_URL").expect("UPLOAD_URL must be set");
-    let transcript_url = std::env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL must be set");
-
     let client = reqwest::Client::new();
 
     let mut file = File::open(file_path)?;
@@ -155,8 +154,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
     file.read_to_end(&mut audio_data)?;
 
     let upload_response = client
-        .post(&upload_url)
-        .header("authorization", &api_key)
+        .post(UPLOAD_URL)
+        .header("authorization", API_KEY)
         .header("content-type", "audio/wav")
         .body(audio_data)
         .send()
@@ -169,8 +168,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
         .ok_or("Failed to get upload URL")?;
 
     let transcript_request = client
-        .post(&transcript_url)
-        .header("authorization", &api_key)
+        .post(TRANSCRIPT_URL)
+        .header("authorization", API_KEY)
         .json(&serde_json::json!({ "audio_url": audio_url }))
         .send()
         .await?
@@ -183,8 +182,8 @@ async fn upload_and_transcribe(file_path: &str) -> Result<String, Box<dyn Error>
 
     loop {
         let status_response = client
-            .get(format!("{}/{}", transcript_url, transcript_id))
-            .header("authorization", &api_key)
+            .get(format!("{}/{}", TRANSCRIPT_URL, transcript_id))
+            .header("authorization", API_KEY)
             .send()
             .await?
             .json::<Value>()
