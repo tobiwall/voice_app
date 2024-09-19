@@ -1,3 +1,4 @@
+use dotenvy::dotenv;
 use portaudio as pa;
 use serde_json::Value;
 use shuttle_runtime::Error as ShuttleError;
@@ -22,96 +23,101 @@ struct MyService {}
 #[shuttle_runtime::async_trait]
 impl shuttle_runtime::Service for MyService {
     async fn bind(self, _addr: std::net::SocketAddr) -> Result<(), ShuttleError> {
-        // Load environment variables
-        dotenvy::dotenv().ok();
-        let api_key = env::var("API_KEY").expect("API_KEY not set");
-        let upload_url = env::var("UPLOAD_URL").expect("UPLOAD_URL not set");
-        let transcript_url = env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL not set");
+        // Lade Umgebungsvariablen
+        dotenv().ok();
+        let api_key = Arc::new(env::var("API_KEY").expect("API_KEY not set"));
+        let upload_url = Arc::new(env::var("UPLOAD_URL").expect("UPLOAD_URL not set"));
+        let transcript_url = Arc::new(env::var("TRANSCRIPT_URL").expect("TRANSCRIPT_URL not set"));
 
-        // Set up shared state
+        // Gemeinsamer Zustand
         let samples = Arc::new(Mutex::new(Vec::new()));
         let is_recording = Arc::new(Mutex::new(false));
         let samples_clone = Arc::clone(&samples);
         let is_recording_clone = Arc::clone(&is_recording);
 
-        // Serve static frontend files
+        // Statische Dateien (Frontend)
         let frontend = warp::fs::dir("./frontend");
 
-        // Start recording route
-        let start = warp::path("record").and(warp::post()).map({
-            let samples = Arc::clone(&samples_clone);
-            let is_recording = Arc::clone(&is_recording_clone);
+        // Route zum Starten der Aufnahme
+        let start = warp::path("record")
+            .and(warp::post())
+            .map({
+                let samples = Arc::clone(&samples_clone);
+                let is_recording = Arc::clone(&is_recording_clone);
 
-            move || {
-                let mut is_recording_lock = is_recording.lock().unwrap();
-                if !*is_recording_lock {
-                    *is_recording_lock = true;
-                    let samples = Arc::clone(&samples);
-                    tokio::spawn(async move {
-                        let pa = pa::PortAudio::new().unwrap();
-                        let input_params: pa::InputStreamSettings<f32> = pa
-                            .default_input_stream_settings(1, SAMPLE_RATE, FRAMES_PER_BUFFER)
-                            .unwrap();
-                        let mut stream = pa
-                            .open_non_blocking_stream(
-                                input_params,
-                                move |pa::InputStreamCallbackArgs { buffer, .. }| {
-                                    let mut samples_lock = samples.lock().unwrap();
-                                    samples_lock.extend_from_slice(buffer);
-                                    pa::Continue
-                                },
-                            )
-                            .unwrap();
-                        stream.start().unwrap();
-                        println!("Recording started.");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await; // Example: Record for 10 seconds
-                        stream.stop().unwrap();
-                        stream.close().unwrap();
-                        println!("Recording stopped.");
-                    });
-                }
-                warp::reply::with_status("Recording started", warp::http::StatusCode::OK)
-            }
-        });
-
-        // Stop recording route
-        let stop = warp::path("stop_recording").and(warp::post()).map({
-            let samples = Arc::clone(&samples_clone);
-            let is_recording = Arc::clone(&is_recording_clone);
-            let api_key = api_key.clone();
-            let upload_url = upload_url.clone();
-            let transcript_url = transcript_url.clone();
-
-            move || {
-                let mut is_recording_lock = is_recording.lock().unwrap();
-                if *is_recording_lock {
-                    *is_recording_lock = false;
-                    println!("Recording stopped.");
-
-                    // Save samples to file and trigger transcription process
-                    let samples_lock = samples.lock().unwrap();
-                    let file_path = "recording.wav";
-                    match save_samples_to_file(&samples_lock, file_path) {
-                        Ok(_) => {
-                            println!("Audio saved to file: {}", file_path);
-                            // Now upload and transcribe the file
-                            tokio::spawn(async move {
-                                match upload_and_transcribe(file_path, &api_key, &upload_url, &transcript_url).await {
-                                    Ok(transcription) => {
-                                        println!("Transcription: {}", transcription)
-                                    }
-                                    Err(e) => eprintln!("Error during transcription: {}", e),
-                                }
-                            });
-                        }
-                        Err(e) => eprintln!("Error saving audio file: {}", e),
+                move || {
+                    let mut is_recording_lock = is_recording.lock().unwrap();
+                    if !*is_recording_lock {
+                        *is_recording_lock = true;
+                        let samples = Arc::clone(&samples);
+                        tokio::spawn(async move {
+                            let pa = pa::PortAudio::new().unwrap();
+                            let input_params: pa::InputStreamSettings<f32> = pa
+                                .default_input_stream_settings(1, SAMPLE_RATE, FRAMES_PER_BUFFER)
+                                .unwrap();
+                            let mut stream = pa
+                                .open_non_blocking_stream(
+                                    input_params,
+                                    move |pa::InputStreamCallbackArgs { buffer, .. }| {
+                                        let mut samples_lock = samples.lock().unwrap();
+                                        samples_lock.extend_from_slice(buffer);
+                                        pa::Continue
+                                    },
+                                )
+                                .unwrap();
+                            stream.start().unwrap();
+                            println!("Recording started.");
+                            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await; // Aufnahmezeit
+                            stream.stop().unwrap();
+                            stream.close().unwrap();
+                            println!("Recording stopped.");
+                        });
                     }
+                    warp::reply::with_status("Recording started", warp::http::StatusCode::OK)
                 }
-                warp::reply::with_status("Recording stopped", warp::http::StatusCode::OK)
-            }
-        });
+            });
 
-        // Combine routes
+        // Route zum Stoppen der Aufnahme
+        let stop = warp::path("stop_recording")
+            .and(warp::post())
+            .map({
+                let samples = Arc::clone(&samples_clone);
+                let is_recording = Arc::clone(&is_recording_clone);
+                let api_key = Arc::clone(&api_key);
+                let upload_url = Arc::clone(&upload_url);
+                let transcript_url = Arc::clone(&transcript_url);
+
+                move || {
+                    let mut is_recording_lock = is_recording.lock().unwrap();
+                    if *is_recording_lock {
+                        *is_recording_lock = false;
+                        println!("Recording stopped.");
+
+                        let samples_lock = samples.lock().unwrap();
+                        let file_path = "recording.wav";
+                        match save_samples_to_file(&samples_lock, file_path) {
+                            Ok(_) => {
+                                println!("Audio saved to file: {}", file_path);
+                                let api_key = Arc::clone(&api_key);
+                                let upload_url = Arc::clone(&upload_url);
+                                let transcript_url = Arc::clone(&transcript_url);
+                                tokio::spawn(async move {
+                                    match upload_and_transcribe(file_path, &api_key, &upload_url, &transcript_url).await {
+                                        Ok(transcription) => {
+                                            println!("Transcription: {}", transcription)
+                                        }
+                                        Err(e) => eprintln!("Error during transcription: {}", e),
+                                    }
+                                });
+                            }
+                            Err(e) => eprintln!("Error saving audio file: {}", e),
+                        }
+                    }
+                    warp::reply::with_status("Recording stopped", warp::http::StatusCode::OK)
+                }
+            });
+
+        // Kombiniere Routen
         let routes = frontend.or(start).or(stop);
 
         println!("Starting Warp server...");
@@ -141,7 +147,7 @@ fn save_samples_to_file(samples: &[f32], path: &str) -> Result<(), Box<dyn Error
     Ok(())
 }
 
-async fn upload_and_transcribe(file_path: &str, api_key: &str, upload_url: &str, transcript_url: &str) -> Result<String, Box<dyn Error>> {
+async fn upload_and_transcribe(file_path: &str, api_key: &Arc<String>, upload_url: &Arc<String>, transcript_url: &Arc<String>) -> Result<String, Box<dyn Error>> {
     let client = reqwest::Client::new();
 
     let mut file = File::open(file_path)?;
@@ -149,8 +155,8 @@ async fn upload_and_transcribe(file_path: &str, api_key: &str, upload_url: &str,
     file.read_to_end(&mut audio_data)?;
 
     let upload_response = client
-        .post(upload_url)
-        .header("authorization", api_key)
+        .post(upload_url.as_str())
+        .header("authorization", api_key.as_str())
         .header("content-type", "audio/wav")
         .body(audio_data)
         .send()
@@ -163,8 +169,8 @@ async fn upload_and_transcribe(file_path: &str, api_key: &str, upload_url: &str,
         .ok_or("Failed to get upload URL")?;
 
     let transcript_request = client
-        .post(transcript_url)
-        .header("authorization", api_key)
+        .post(transcript_url.as_str())
+        .header("authorization", api_key.as_str())
         .json(&serde_json::json!({ "audio_url": audio_url }))
         .send()
         .await?
@@ -177,8 +183,8 @@ async fn upload_and_transcribe(file_path: &str, api_key: &str, upload_url: &str,
 
     loop {
         let status_response = client
-            .get(format!("{}/{}", transcript_url, transcript_id))
-            .header("authorization", api_key)
+            .get(format!("{}/{}", transcript_url.as_str(), transcript_id))
+            .header("authorization", api_key.as_str())
             .send()
             .await?
             .json::<Value>()
